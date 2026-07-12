@@ -1,0 +1,55 @@
+name: Oiax
+
+# Reconcile the promotion graph declared in .oiax.yaml.
+#
+# This fixture ships the workflow as manual-dispatch ONLY so it cannot
+# fail on its own before oiax has a tagged release (the composite action
+# downloads a release binary — see the `version` input below). In a real
+# branch-per-environment repository you would enable the event triggers
+# shown here; the push branch list MUST mirror the branches in .oiax.yaml
+# because workflow triggers cannot read that file.
+#
+# on:
+#   push:
+#     branches: [development, test, qa, production-stage-1, main]
+#   pull_request:
+#     types: [closed]
+#   schedule:
+#     - cron: "17 * * * *"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to run against the graph.
+        default: plan
+        type: choice
+        options: [validate, plan, reconcile]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Correctness never depends on this; it only reduces wasted concurrent runs.
+concurrency:
+  group: oiax
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # oiax needs full history of every env branch
+
+      - uses: skaphos/oiax@v1
+        with:
+          config: .oiax.yaml
+          mode: ${{ inputs.mode }}
+          # Pin to a released oiax once v0.1.0 (or later) is published.
+          version: v0.1.0
+          # In production, prefer a GitHub App installation token: PRs
+          # created with the default GITHUB_TOKEN do not trigger
+          # `on: pull_request` and can never merge under branch protection.
+          # token: ${{ steps.app-token.outputs.token }}
