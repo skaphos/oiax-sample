@@ -8,8 +8,19 @@ spec:
   branches:
     development:
       role: source
-    test: {}
-    qa: {}
+    # test and qa are pure transit branches: content only ever reaches them
+    # by promotion. A squash- or merge-commit-merged promotion PR leaves a
+    # destination-unique commit (the squash/merge node), which oiax's
+    # reachability check reports as a downstream divergence (reconcile exit 3)
+    # even though the content is fully represented upstream. drift: expected
+    # acknowledges that expected promotion residue instead of failing on it.
+    # See the README "Drift on transit branches" section. Backflow sources
+    # (production-stage-1, main) must NOT use this — their downstream-only
+    # content is returned by backflow, not ignored.
+    test:
+      drift: expected
+    qa:
+      drift: expected
     production-stage-1: {}
     main:
       role: terminal
