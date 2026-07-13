@@ -12,9 +12,10 @@ name: Oiax
 # run under a GitHub App installation token minted below, NOT the default
 # GITHUB_TOKEN: PRs opened by github-actions[bot] do not start `on: pull_request`
 # checks automatically, so a managed promotion would sit with unrun CI. The App
-# token carries the write scopes; the workflow's own GITHUB_TOKEN is therefore
-# reduced to contents:read (checkout only). The bot's credentials are supplied
-# as the RELEASE_BOT_CLIENT_ID variable and RELEASE_BOT_PRIVATE_KEY secret.
+# token carries the write scopes and is used for BOTH the checkout and the
+# oiax step (see the checkout note below); the workflow's own GITHUB_TOKEN is
+# reduced to contents:read. The bot's credentials are supplied as the
+# RELEASE_BOT_CLIENT_ID variable and RELEASE_BOT_PRIVATE_KEY secret.
 # See https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md
 
 on:
@@ -33,7 +34,7 @@ on:
     - cron: "17 * * * *"
 
 permissions:
-  contents: read   # checkout only; oiax's writes use the App token minted below
+  contents: read   # the default token does no writes; the App token (below) does
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
 concurrency:
@@ -56,6 +57,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0        # required: full history for correct equivalence detection
+          # Check out with the App token too. actions/checkout persists its
+          # token as the git credential for github.com; if left as the default
+          # GITHUB_TOKEN, that persisted (contents:read) credential shadows the
+          # App-token auth on oiax's `git push`, and the push fails 403 as
+          # github-actions[bot]. Using the App token here makes the persisted
+          # credential the App identity, which has write.
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: skaphos/oiax@v1
         with:
