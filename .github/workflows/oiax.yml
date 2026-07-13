@@ -2,22 +2,22 @@ name: Oiax
 
 # Reconcile the promotion graph declared in .oiax.yaml.
 #
-# This fixture ships the workflow as manual-dispatch ONLY so it cannot
-# fail on its own before oiax has a tagged release (the composite action
-# downloads a release binary — see the `version` input below). In a real
-# branch-per-environment repository you would enable the event triggers
-# shown here; the push branch list MUST mirror the branches in .oiax.yaml
-# because workflow triggers cannot read that file.
+# push.branches MUST mirror the branches in .oiax.yaml — workflow triggers
+# cannot read that file. If a branch is added to the graph, add it here too.
 #
-# on:
-#   push:
-#     branches: [development, test, qa, production-stage-1, main]
-#   pull_request:
-#     types: [closed]
-#   schedule:
-#     - cron: "17 * * * *"
+# fetch-depth: 0 is required: a shallow clone has no merge base and degrades
+# equivalence detection, which can produce spurious promotion requests.
+#
+# For unattended production under branch protection, replace the default
+# GITHUB_TOKEN with a GitHub App installation token — PRs created by
+# github-actions[bot] do not start on: pull_request checks automatically.
+# See https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md
 
 on:
+  push:
+    branches: [development, test, qa, production-stage-1, main]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       mode:
@@ -25,10 +25,12 @@ on:
         default: plan
         type: choice
         options: [validate, plan, reconcile]
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write        # push oiax/ branches
+  pull-requests: write   # manage promotion requests
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
 concurrency:
@@ -39,17 +41,14 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0        # oiax needs full history of every env branch
+          fetch-depth: 0        # required: full history for correct equivalence detection
 
       - uses: skaphos/oiax@v1
         with:
           config: .oiax.yaml
-          mode: ${{ inputs.mode }}
-          # Pin to a released oiax once v0.1.0 (or later) is published.
-          version: v0.1.0
-          # In production, prefer a GitHub App installation token: PRs
-          # created with the default GITHUB_TOKEN do not trigger
-          # `on: pull_request` and can never merge under branch protection.
+          # Manual runs honor the dispatch input; event/schedule runs reconcile.
+          mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
+          # Prefer a GitHub App installation token so managed PRs start CI.
           # token: ${{ steps.app-token.outputs.token }}
