@@ -8,6 +8,14 @@ name: Oiax
 # fetch-depth: 0 is required: a shallow clone has no merge base and degrades
 # equivalence detection, which can produce spurious promotion requests.
 #
+# Two jobs:
+#   * plan       — runs on pull_request open/update. A read-only dry run that
+#                  posts the plan as a sticky PR comment and publishes a
+#                  NEUTRAL check (never red). A reported divergence changes
+#                  nothing, so it informs reviewers instead of alarming them.
+#   * reconcile  — runs on push / schedule / merge. Actually opens/updates the
+#                  managed PRs and pushes oiax/ branches.
+#
 # Oiax's forge writes (pushing oiax/ branches, opening/managing promotion PRs)
 # run under a GitHub App installation token minted below, NOT the default
 # GITHUB_TOKEN: PRs opened by github-actions[bot] do not start `on: pull_request`
@@ -22,7 +30,7 @@ on:
   push:
     branches: [development, test, qa, production-stage-1, main]
   pull_request:
-    types: [closed]
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
     inputs:
       mode:
@@ -37,12 +45,127 @@ permissions:
   contents: read   # the default token does no writes; the App token (below) does
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
+# Keyed per PR (for plan) and per ref (for push) so a PR's plan never blocks a
+# push reconcile, or vice versa.
 concurrency:
-  group: oiax
+  group: oiax-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # Read-only PR check. Comments the plan and reports a NEUTRAL status so a
+  # report-only divergence (which changes nothing) informs rather than alarms.
+  plan:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # upsert the sticky plan comment
+      checks: write          # publish the neutral check run
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      # `validate` takes no action; it is run here only to install the oiax
+      # binary onto PATH (and confirm the config parses). The next step calls
+      # oiax directly for JSON output and the detailed exit code, which the
+      # composite action does not surface.
+      - uses: skaphos/oiax@v1
+        with:
+          config: .oiax.yaml
+          mode: validate
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Plan (dry run)
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set +e
+          oiax plan --config .oiax.yaml --output json --detailed-exitcode > plan.json 2> plan.log
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+          echo "--- oiax plan log ---"
+          cat plan.log || true
+
+      - name: Comment plan and publish neutral status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const code = Number('${{ steps.plan.outputs.exitcode }}' || '1');
+
+            let plan = { actions: [] };
+            try { plan = JSON.parse(fs.readFileSync('plan.json', 'utf8')); } catch (e) {}
+            const actions = Array.isArray(plan.actions) ? plan.actions : [];
+            const byType = (...t) => actions.filter(a => t.includes(a.type));
+
+            const promotions = byType('createPromotionRequest', 'updateManagedRequest');
+            const backflows  = byType('createBackflowRequest');
+            const diverged   = byType('reportDivergence');
+            const closes     = byType('closeObsoleteRequest');
+
+            const line = a => `- \`${a.from} → ${a.to}\` — ${a.reason || a.type}`;
+            const section = (title, items) => items.length ? `**${title}**\n${items.map(line).join('\n')}\n\n` : '';
+
+            // exit codes: 0 in sync · 2 applyable changes · 3 report-only divergence · else error.
+            const map = {
+              0: { conclusion: 'success', emoji: '✅', headline: 'In sync — nothing to do.' },
+              2: { conclusion: 'neutral', emoji: '🔵', headline: 'Changes will be applied when this merges.' },
+              3: { conclusion: 'neutral', emoji: '🟡', headline: 'A divergence needs a human — nothing was or will be changed automatically.' },
+            };
+            const m = map[code] || { conclusion: 'failure', emoji: '❌', headline: 'oiax failed to plan — see the run log.' };
+
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let body = `<!-- oiax-plan -->\n### ${m.emoji} oiax plan\n\n${m.headline}\n\n`;
+            body += section('Promotions', promotions);
+            body += section('Backflows', backflows);
+            body += section('Divergences — report-only, oiax will not auto-resolve these', diverged);
+            body += section('Housekeeping', closes);
+            if (!actions.length && code !== 1) body += '_No actions — the graph is in sync._\n\n';
+            body += `<sub>Read-only dry run. \`reconcile\` runs on merge/push and does the actual work; `;
+            body += `a 🟡 divergence is informational and changes nothing. [Run](${runUrl})</sub>`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            // Upsert a single sticky comment, keyed by the marker.
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const existing = comments.find(c => c.body && c.body.includes('<!-- oiax-plan -->'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+            // Publish the check run carrying the neutral/success/failure status.
+            await github.rest.checks.create({
+              owner, repo,
+              name: 'oiax plan',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: m.conclusion,
+              output: { title: m.headline, summary: body.replace('<!-- oiax-plan -->\n', '') },
+            });
+
+            // Only a genuine oiax error (exit 1) fails the job red; an in-sync,
+            // applyable, or divergence result keeps the job green and lets the
+            // neutral check run above carry the signal.
+            if (code === 1) core.setFailed('oiax plan errored — see the run log.');
+
   reconcile:
+    # Everything that is not a mid-flight PR: push, schedule, manual dispatch,
+    # and PR close (a merge). This is the job that actually mutates the forge.
+    if: github.event_name != 'pull_request' || github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Mint GitHub App token
