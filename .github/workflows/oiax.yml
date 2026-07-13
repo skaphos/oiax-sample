@@ -2,22 +2,26 @@ name: Oiax
 
 # Reconcile the promotion graph declared in .oiax.yaml.
 #
-# This fixture ships the workflow as manual-dispatch ONLY so it cannot
-# fail on its own before oiax has a tagged release (the composite action
-# downloads a release binary — see the `version` input below). In a real
-# branch-per-environment repository you would enable the event triggers
-# shown here; the push branch list MUST mirror the branches in .oiax.yaml
-# because workflow triggers cannot read that file.
+# push.branches MUST mirror the branches in .oiax.yaml — workflow triggers
+# cannot read that file. If a branch is added to the graph, add it here too.
 #
-# on:
-#   push:
-#     branches: [development, test, qa, production-stage-1, main]
-#   pull_request:
-#     types: [closed]
-#   schedule:
-#     - cron: "17 * * * *"
+# fetch-depth: 0 is required: a shallow clone has no merge base and degrades
+# equivalence detection, which can produce spurious promotion requests.
+#
+# Oiax's forge writes (pushing oiax/ branches, opening/managing promotion PRs)
+# run under a GitHub App installation token minted below, NOT the default
+# GITHUB_TOKEN: PRs opened by github-actions[bot] do not start `on: pull_request`
+# checks automatically, so a managed promotion would sit with unrun CI. The App
+# token carries the write scopes; the workflow's own GITHUB_TOKEN is therefore
+# reduced to contents:read (checkout only). The bot's credentials are supplied
+# as the RELEASE_BOT_CLIENT_ID variable and RELEASE_BOT_PRIVATE_KEY secret.
+# See https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md
 
 on:
+  push:
+    branches: [development, test, qa, production-stage-1, main]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       mode:
@@ -25,10 +29,11 @@ on:
         default: plan
         type: choice
         options: [validate, plan, reconcile]
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read   # checkout only; oiax's writes use the App token minted below
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
 concurrency:
@@ -39,17 +44,23 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
         with:
-          fetch-depth: 0        # oiax needs full history of every env branch
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # required: full history for correct equivalence detection
 
       - uses: skaphos/oiax@v1
         with:
           config: .oiax.yaml
-          mode: ${{ inputs.mode }}
-          # Pin to a released oiax once v0.1.0 (or later) is published.
-          version: v0.1.0
-          # In production, prefer a GitHub App installation token: PRs
-          # created with the default GITHUB_TOKEN do not trigger
-          # `on: pull_request` and can never merge under branch protection.
-          # token: ${{ steps.app-token.outputs.token }}
+          # Manual runs honor the dispatch input; event/schedule runs reconcile.
+          mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
+          # App installation token so managed PRs start on: pull_request CI.
+          token: ${{ steps.app-token.outputs.token }}
