@@ -20,17 +20,59 @@ development ──▶ test ──▶ qa ──▶ production-stage-1 ──▶ m
    (source)                                          (terminal)
 ```
 
-| Branch               | Role     | Notes                                   |
-| -------------------- | -------- | --------------------------------------- |
-| `development`        | source   | where net-new change enters             |
-| `test`               | —        | promotion target                        |
-| `qa`                 | —        | promotion target                        |
-| `production-stage-1` | —        | promotion target; backflow source       |
-| `main`               | terminal | production; backflow source; default    |
+| Branch               | Role     | Notes                                        |
+| -------------------- | -------- | -------------------------------------------- |
+| `development`        | source   | where net-new change enters                  |
+| `test`               | —        | promotion target; `drift: expected`          |
+| `qa`                 | —        | promotion target; `drift: expected`          |
+| `production-stage-1` | —        | promotion target; backflow source            |
+| `main`               | terminal | production; backflow source; default         |
 
 Backflow returns hotfixes applied on `production-stage-1` or `main`
 back to `development` via `cherry-pick`, then they promote forward
 normally.
+
+### Drift on transit branches (recommended)
+
+`test` and `qa` are declared **`drift: expected`**. This is a deliberate
+recommendation for pure *transit* branches — branches that only ever
+receive content through promotion — and it is worth understanding before
+you adapt this fixture to a real graph.
+
+oiax decides whether a destination has diverged **by reachability**
+(`git rev-list <source>..<destination>`), not by content. When a
+promotion PR is merged with **"Squash and merge"** or **"Create a merge
+commit"** — GitHub's two default buttons — the destination gains a new
+commit that exists on no upstream branch: the squash commit, or the merge
+node. That commit's *content* is fully represented upstream, but as a
+commit it is unique to the destination, so oiax reports it:
+
+```
+report  development -> test (1): test has 1 commits not represented in development
+converged with reported divergence      # reconcile exits 3
+```
+
+Only a **fast-forward** promotion leaves the destination a strict subset
+with nothing unique (`rev-list` empty). Since GitHub's standard PR merge
+buttons do not fast-forward, a transit branch inevitably accumulates this
+benign promotion residue. `drift: expected` tells oiax to acknowledge
+downstream-only content on that branch silently, so the residue does not
+trip a `reconcile` exit 3 on every cycle.
+
+Where **not** to use it:
+
+- **Backflow sources** (`production-stage-1`, `main`) must stay
+  drift-forbidden (the default). Their downstream-only content is a
+  hotfix to be *returned* by backflow, not ignored — oiax's validator
+  rejects `drift: expected` on a backflow source.
+- If you can enforce **fast-forward-only promotions** (via the API, the
+  CLI, or a merge queue), prefer that and keep every branch
+  drift-forbidden: the graph stays clean and genuine accidental drift on
+  a transit branch is still caught. `drift: expected` is the pragmatic
+  choice when promotions merge as squash/merge commits on GitHub.
+
+See the upstream [drift policy
+guide](https://github.com/skaphos/oiax/blob/main/docs/guides/promotion-graphs.md#drift-policy).
 
 ## Seeded divergence (at a glance)
 
