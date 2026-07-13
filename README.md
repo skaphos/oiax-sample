@@ -60,16 +60,27 @@ oiax plan         # the dry run: promotion + backflow actions
 oiax reconcile    # plan, then create the managed PRs
 ```
 
-`reconcile` (once oiax is released and given a forge token) opens the
-managed pull requests directly on this repo. To reset the fixture,
-re-run [`scripts/seed.sh`](scripts/seed.sh) or re-clone.
+`reconcile` (given a forge token via `GITHUB_TOKEN`) opens the managed
+pull requests directly on this repo. To reset the fixture, re-run
+[`scripts/seed.sh`](scripts/seed.sh) or re-clone.
+
+Install the CLI (needs Go 1.26+):
+
+```bash
+go install github.com/skaphos/oiax/cmd/oiax@latest
+```
 
 ## In-repo automation
 
-[`.github/workflows/oiax.yml`](.github/workflows/oiax.yml) ships the
-reconcile workflow as **manual-dispatch only** so it can't fail before
-oiax has a tagged release. Enable the event triggers commented inside it
-to run oiax the way a production repo would.
+[`.github/workflows/oiax.yml`](.github/workflows/oiax.yml) runs
+`skaphos/oiax@v1` on pushes to environment branches, promotion-PR close,
+an hourly schedule, and manual dispatch. Manual runs default to
+`mode: plan` so you can inspect the fixture dry-run from the Actions UI.
+
+For unattended production under branch protection, wire a GitHub App
+installation token into the Action's `token` input — PRs created with the
+default `GITHUB_TOKEN` do not start `on: pull_request` checks. See the
+[tokens guide](https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md).
 
 ## Resetting
 
