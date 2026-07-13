@@ -8,9 +8,13 @@ name: Oiax
 # fetch-depth: 0 is required: a shallow clone has no merge base and degrades
 # equivalence detection, which can produce spurious promotion requests.
 #
-# For unattended production under branch protection, replace the default
-# GITHUB_TOKEN with a GitHub App installation token — PRs created by
-# github-actions[bot] do not start on: pull_request checks automatically.
+# Oiax's forge writes (pushing oiax/ branches, opening/managing promotion PRs)
+# run under a GitHub App installation token minted below, NOT the default
+# GITHUB_TOKEN: PRs opened by github-actions[bot] do not start `on: pull_request`
+# checks automatically, so a managed promotion would sit with unrun CI. The App
+# token carries the write scopes; the workflow's own GITHUB_TOKEN is therefore
+# reduced to contents:read (checkout only). The bot's credentials are supplied
+# as the RELEASE_BOT_CLIENT_ID variable and RELEASE_BOT_PRIVATE_KEY secret.
 # See https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md
 
 on:
@@ -29,8 +33,7 @@ on:
     - cron: "17 * * * *"
 
 permissions:
-  contents: write        # push oiax/ branches
-  pull-requests: write   # manage promotion requests
+  contents: read   # checkout only; oiax's writes use the App token minted below
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
 concurrency:
@@ -41,6 +44,15 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0        # required: full history for correct equivalence detection
@@ -50,5 +62,5 @@ jobs:
           config: .oiax.yaml
           # Manual runs honor the dispatch input; event/schedule runs reconcile.
           mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
-          # Prefer a GitHub App installation token so managed PRs start CI.
-          # token: ${{ steps.app-token.outputs.token }}
+          # App installation token so managed PRs start on: pull_request CI.
+          token: ${{ steps.app-token.outputs.token }}
