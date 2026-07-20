@@ -65,10 +65,35 @@ jobs:
           # credential the App identity, which has write.
           token: ${{ steps.app-token.outputs.token }}
 
+      # Install oiax and prepare git refs. `validate` takes no action; it is run
+      # here only to put the binary on PATH and run the action's ref-prepare step
+      # (fetch every branch, set origin/HEAD) so the next step can invoke oiax
+      # directly and inspect its exit code — which the composite action does not
+      # surface.
       - uses: skaphos/oiax@v1
         with:
           config: .oiax.yaml
-          # Manual runs honor the dispatch input; event/schedule runs reconcile.
-          mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
-          # App installation token so managed PRs start on: pull_request CI.
+          mode: validate
           token: ${{ steps.app-token.outputs.token }}
+
+      - name: Reconcile
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Manual runs honor the dispatch input; event/schedule runs reconcile.
+          OIAX_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
+        run: |
+          set +e
+          oiax "${OIAX_MODE}" --config .oiax.yaml
+          code=$?
+          set -e
+          # oiax exit codes: 0 in sync · 2 changes applied · 3 report-only
+          # divergence · other = error. A report-only divergence is a conflict a
+          # human must clear (e.g. a squash on the promotion path); it is NOT a
+          # pipeline failure. Surface it as a warning annotation and keep the run
+          # green so a standing divergence is distinguishable from a real
+          # breakage — and read the oiax/conflict issue oiax opens for it.
+          case "${code}" in
+            0 | 2) ;;
+            3) echo "::warning title=oiax divergence::oiax reported a divergence (exit 3); a backflow needs a human. See the open oiax/conflict issue." ;;
+            *) echo "::error title=oiax failed::oiax exited ${code}"; exit "${code}" ;;
+          esac
