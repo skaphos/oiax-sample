@@ -81,10 +81,18 @@ go install github.com/skaphos/oiax/cmd/oiax@latest
 
 ## In-repo automation
 
-[`.github/workflows/oiax.yml`](.github/workflows/oiax.yml) runs
-`skaphos/oiax@v1` on pushes to environment branches, promotion-PR close,
-an hourly schedule, and manual dispatch. Manual runs default to
-`mode: plan` so you can inspect the fixture dry-run from the Actions UI.
+[`.github/workflows/oiax.yml`](.github/workflows/oiax.yml) has two jobs:
+
+- **plan** — on pull requests, a read-only dry run that posts the plan as a
+  sticky PR comment and publishes a **neutral** check (never red). A
+  report-only divergence changes nothing, so it is surfaced as information,
+  not a scary failed check.
+- **reconcile** — on pushes to environment branches, promotion-PR merge, an
+  hourly schedule, and manual dispatch. This is the job that actually
+  opens/updates managed PRs and pushes `oiax/` branches.
+
+Manual dispatch defaults to `mode: plan` so you can inspect the dry run from
+the Actions UI.
 
 For unattended production under branch protection, wire a GitHub App
 installation token into the Action's `token` input — PRs created with the
