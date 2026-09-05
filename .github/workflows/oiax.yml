@@ -68,6 +68,18 @@ jobs:
           # credential the App identity, which has write.
           token: ${{ steps.app-token.outputs.token }}
 
+      # Fixture-only. scripts/seed.sh force-pushes the environment branches, so
+      # the `sourceHead` recorded in an already-merged managed promotion request
+      # (PR #18, development -> test) is no longer reachable from any branch.
+      # Oiax resolves that head when it evaluates the edge and fails hard —
+      # `git merge-base: Not a valid commit name …`, exit 1 — when it is missing.
+      # On GitHub the commit survives as refs/pull/<n>/head, so fetching those
+      # refs keeps it resolvable. This affects oiax 1.x and 2.x alike; it is not
+      # a v2 behavior change. A repository that never rewrites a promotion
+      # source needs none of this.
+      - name: Keep merged managed-request heads resolvable
+        run: git fetch --no-tags origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
+
       # Install oiax and prepare git refs. `validate` takes no action; it is run
       # here only to put the binary on PATH and run the action's ref-prepare step
       # (fetch every branch, set origin/HEAD) so the next step can invoke oiax

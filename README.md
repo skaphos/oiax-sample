@@ -104,6 +104,14 @@ local tool for driving this fixture from a workstation.
 an hourly schedule, and manual dispatch. Manual runs default to
 `mode: plan` so you can inspect the fixture dry-run from the Actions UI.
 
+The workflow also fetches `refs/pull/*/head` before running oiax. That step
+exists only because this repo is reset by force-push: an already-merged
+managed promotion request records the `sourceHead` it promoted, and a reset
+orphans that commit. Oiax resolves the recorded head when it evaluates the
+edge and exits 1 if it cannot — on oiax 1.x and 2.x alike. GitHub keeps the
+commit under `refs/pull/<n>/head`, so fetching those refs is enough. A
+repository that never rewrites a promotion source will never hit this.
+
 For unattended production under branch protection, wire a GitHub App
 installation token into the Action's `token` input — PRs created with the
 default `GITHUB_TOKEN` do not start `on: pull_request` checks. See the
