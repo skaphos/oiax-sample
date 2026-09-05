@@ -2,22 +2,27 @@ name: Oiax
 
 # Reconcile the promotion graph declared in .oiax.yaml.
 #
-# This fixture ships the workflow as manual-dispatch ONLY so it cannot
-# fail on its own before oiax has a tagged release (the composite action
-# downloads a release binary — see the `version` input below). In a real
-# branch-per-environment repository you would enable the event triggers
-# shown here; the push branch list MUST mirror the branches in .oiax.yaml
-# because workflow triggers cannot read that file.
+# push.branches MUST mirror the branches in .oiax.yaml — workflow triggers
+# cannot read that file. If a branch is added to the graph, add it here too.
 #
-# on:
-#   push:
-#     branches: [development, test, qa, production-stage-1, main]
-#   pull_request:
-#     types: [closed]
-#   schedule:
-#     - cron: "17 * * * *"
+# fetch-depth: 0 is required: a shallow clone has no merge base and degrades
+# equivalence detection, which can produce spurious promotion requests.
+#
+# Oiax's forge writes (pushing oiax/ branches, opening/managing promotion PRs)
+# run under a GitHub App installation token minted below, NOT the default
+# GITHUB_TOKEN: PRs opened by github-actions[bot] do not start `on: pull_request`
+# checks automatically, so a managed promotion would sit with unrun CI. The App
+# token carries the write scopes and is used for BOTH the checkout and the
+# oiax step (see the checkout note below); the workflow's own GITHUB_TOKEN is
+# reduced to contents:read. The bot's credentials are supplied as the
+# RELEASE_BOT_CLIENT_ID variable and RELEASE_BOT_PRIVATE_KEY secret.
+# See https://github.com/skaphos/oiax/blob/main/docs/guides/tokens.md
 
 on:
+  push:
+    branches: [development, test, qa, production-stage-1, main]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       mode:
@@ -25,10 +30,11 @@ on:
         default: plan
         type: choice
         options: [validate, plan, reconcile]
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read   # the default token does no writes; the App token (below) does
 
 # Correctness never depends on this; it only reduces wasted concurrent runs.
 concurrency:
@@ -37,19 +43,76 @@ concurrency:
 
 jobs:
   reconcile:
+    # oiax v2 supports Linux for production automation; the macOS/Windows
+    # binaries are best-effort local tools only. Keep this on ubuntu-*.
+    # https://github.com/skaphos/oiax/blob/main/docs/adr/0016-linux-automation-support.md
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
         with:
-          fetch-depth: 0        # oiax needs full history of every env branch
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
-      - uses: skaphos/oiax@v1
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # required: full history for correct equivalence detection
+          # Check out with the App token too. actions/checkout persists its
+          # token as the git credential for github.com; if left as the default
+          # GITHUB_TOKEN, that persisted (contents:read) credential shadows the
+          # App-token auth on oiax's `git push`, and the push fails 403 as
+          # github-actions[bot]. Using the App token here makes the persisted
+          # credential the App identity, which has write.
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Fixture-only. scripts/seed.sh force-pushes the environment branches, so
+      # the `sourceHead` recorded in an already-merged managed promotion request
+      # (PR #18, development -> test) is no longer reachable from any branch.
+      # Oiax resolves that head when it evaluates the edge and fails hard —
+      # `git merge-base: Not a valid commit name …`, exit 1 — when it is missing.
+      # On GitHub the commit survives as refs/pull/<n>/head, so fetching those
+      # refs keeps it resolvable. This affects oiax 1.x and 2.x alike; it is not
+      # a v2 behavior change. A repository that never rewrites a promotion
+      # source needs none of this.
+      - name: Keep merged managed-request heads resolvable
+        run: git fetch --no-tags origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
+
+      # Install oiax and prepare git refs. `validate` takes no action; it is run
+      # here only to put the binary on PATH and run the action's ref-prepare step
+      # (fetch every branch, set origin/HEAD) so the next step can invoke oiax
+      # directly and inspect its exit code — which the composite action does not
+      # surface.
+      #
+      # @v2 tracks published 2.x releases and selects its matching binary; no
+      # `version:` input is set, so wrapper and binary never disagree. @v1
+      # stays on the 1.x line and cannot run a 2.x binary.
+      - uses: skaphos/oiax@v2
         with:
           config: .oiax.yaml
-          mode: ${{ inputs.mode }}
-          # Pin to a released oiax once v0.1.0 (or later) is published.
-          version: v0.1.0
-          # In production, prefer a GitHub App installation token: PRs
-          # created with the default GITHUB_TOKEN do not trigger
-          # `on: pull_request` and can never merge under branch protection.
-          # token: ${{ steps.app-token.outputs.token }}
+          mode: validate
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Reconcile
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Manual runs honor the dispatch input; event/schedule runs reconcile.
+          OIAX_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'reconcile' }}
+        run: |
+          set +e
+          oiax "${OIAX_MODE}" --config .oiax.yaml
+          code=$?
+          set -e
+          # oiax exit codes: 0 in sync · 2 changes applied · 3 report-only
+          # divergence · other = error. A report-only divergence is a conflict a
+          # human must clear (e.g. a squash on the promotion path); it is NOT a
+          # pipeline failure. Surface it as a warning annotation and keep the run
+          # green so a standing divergence is distinguishable from a real
+          # breakage — and read the oiax/conflict issue oiax opens for it.
+          case "${code}" in
+            0 | 2) ;;
+            3) echo "::warning title=oiax divergence::oiax reported a divergence (exit 3); a backflow needs a human. See the open oiax/conflict issue." ;;
+            *) echo "::error title=oiax failed::oiax exited ${code}"; exit "${code}" ;;
+          esac

@@ -1,4 +1,7 @@
-apiVersion: oiax.skaphos.dev/v1alpha1
+# The configuration API version is independent of the oiax release major:
+# oiax 2.x still reads oiax.skaphos.dev/v1. Do not bump this to /v2.
+# https://github.com/skaphos/oiax/blob/main/docs/guides/upgrading-v2.md
+apiVersion: oiax.skaphos.dev/v1
 kind: PromotionGraph
 
 metadata:
@@ -8,8 +11,15 @@ spec:
   branches:
     development:
       role: source
-    test: {}
-    qa: {}
+    # test and qa are transit branches (content reaches them only by
+    # promotion). This repo merges via rebase, which leaves a destination-only
+    # commit on each promotion; drift: expected acknowledges that residue so it
+    # is not reported as a divergence. Why, and the fast-forward alternative:
+    # https://github.com/skaphos/oiax/blob/main/docs/guides/promotion-graphs.md#transit-branches-and-merge-residue
+    test:
+      drift: expected
+    qa:
+      drift: expected
     production-stage-1: {}
     main:
       role: terminal
