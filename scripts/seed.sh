@@ -25,6 +25,9 @@
 #   scripts/seed.sh
 #   OIAX_SAMPLE_REMOTE=fork scripts/seed.sh   # push somewhere else
 #
+# In-place edits use `perl -pi` rather than `sed -i`: GNU and BSD sed disagree
+# on whether -i takes a suffix argument, so `sed -i 's/…/…/' file` fails on
+# macOS. This script is a local workstation tool and must run on both.
 set -euo pipefail
 
 REMOTE="${OIAX_SAMPLE_REMOTE:-origin}"
@@ -58,7 +61,7 @@ done
 # --- Scenario 1: progression (promotion) -------------------------------
 # development gains one feature commit that no other branch has.
 git switch -C development "$BASE" >/dev/null
-sed -i 's#sample-app:1\.0\.0#sample-app:1.1.0#' app/deployment.yaml
+perl -pi -e 's#sample-app:1\.0\.0#sample-app:1.1.0#' app/deployment.yaml
 mkdir -p app/features
 cat > app/features/analytics-dashboard.yaml <<'YAML'
 # Analytics dashboard, introduced in 1.1.0. Enters on development and is
@@ -77,9 +80,9 @@ git commit -s -q -m "feat(app): add analytics dashboard and bump to 1.1.0"
 # main gains one hotfix commit that no upstream branch has. It touches a
 # file disjoint from Scenario 1 so the backflow cherry-pick applies clean.
 git switch -C main "$BASE" >/dev/null
-sed -i \
-  -e 's/^timeoutSeconds: 30$/timeoutSeconds: 120/' \
-  -e 's/^logLevel: info$/logLevel: warn/' \
+perl -pi \
+  -e 's/^timeoutSeconds: 30$/timeoutSeconds: 120/;' \
+  -e 's/^logLevel: info$/logLevel: warn/;' \
   app/config.yaml
 git add -A
 git commit -s -q -m "fix(config): raise request timeout to 120s (production hotfix)"
