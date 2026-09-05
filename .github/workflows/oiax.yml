@@ -43,6 +43,9 @@ concurrency:
 
 jobs:
   reconcile:
+    # oiax v2 supports Linux for production automation; the macOS/Windows
+    # binaries are best-effort local tools only. Keep this on ubuntu-*.
+    # https://github.com/skaphos/oiax/blob/main/docs/adr/0016-linux-automation-support.md
     runs-on: ubuntu-latest
     steps:
       - name: Mint GitHub App token
@@ -70,7 +73,11 @@ jobs:
       # (fetch every branch, set origin/HEAD) so the next step can invoke oiax
       # directly and inspect its exit code — which the composite action does not
       # surface.
-      - uses: skaphos/oiax@v1
+      #
+      # @v2 tracks published 2.x releases and selects its matching binary; no
+      # `version:` input is set, so wrapper and binary never disagree. @v1
+      # stays on the 1.x line and cannot run a 2.x binary.
+      - uses: skaphos/oiax@v2
         with:
           config: .oiax.yaml
           mode: validate

@@ -73,16 +73,34 @@ oiax reconcile    # plan, then create the managed PRs
 pull requests directly on this repo. To reset the fixture, re-run
 [`scripts/seed.sh`](scripts/seed.sh) or re-clone.
 
-Install the CLI (needs Go 1.26+):
+Install the CLI from the [v2.0.0
+release](https://github.com/skaphos/oiax/releases/tag/v2.0.0) and verify it
+against that release's `checksums.txt`:
 
 ```bash
-go install github.com/skaphos/oiax/cmd/oiax@latest
+OIAX_VERSION=2.0.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')       # linux · darwin
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+BASE=https://github.com/skaphos/oiax/releases/download/v${OIAX_VERSION}
+
+curl -fsSLO "${BASE}/oiax_${OIAX_VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "${BASE}/checksums.txt"
+shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf "oiax_${OIAX_VERSION}_${OS}_${ARCH}.tar.gz" oiax
+./oiax version    # must report 2.0.0
 ```
+
+`go install` is not a route to 2.x: oiax's module path is still
+`github.com/skaphos/oiax` (no `/v2` suffix), so the Go proxy ignores the v2
+tags and `@latest` resolves to **v1.3.0**. Use the release archive.
+
+Automation runs on Linux under v2; the darwin binary above is a best-effort
+local tool for driving this fixture from a workstation.
 
 ## In-repo automation
 
 [`.github/workflows/oiax.yml`](.github/workflows/oiax.yml) runs
-`skaphos/oiax@v1` on pushes to environment branches, promotion-PR close,
+`skaphos/oiax@v2` on pushes to environment branches, promotion-PR close,
 an hourly schedule, and manual dispatch. Manual runs default to
 `mode: plan` so you can inspect the fixture dry-run from the Actions UI.
 
