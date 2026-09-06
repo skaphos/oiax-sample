@@ -77,6 +77,11 @@ jobs:
       # refs keeps it resolvable. This affects oiax 1.x and 2.x alike; it is not
       # a v2 behavior change. A repository that never rewrites a promotion
       # source needs none of this.
+      #
+      # skaphos/oiax#81 makes oiax skip the baseline rung instead of failing on
+      # an unresolvable recorded head, which removes the need for this step.
+      # Drop it once @v2 resolves a release containing that fix — keeping it is
+      # harmless either way, since the rung then still has its object.
       - name: Keep merged managed-request heads resolvable
         run: git fetch --no-tags origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
 
