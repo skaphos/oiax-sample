@@ -3,7 +3,7 @@
 # This file is the target of the seeded *backflow* (hotfix) scenario:
 # see SCENARIOS.md. It is deliberately disjoint from the files touched
 # by the promotion scenario so backflow cherry-picks apply cleanly.
-timeoutSeconds: 30
-logLevel: info
+timeoutSeconds: 120
+logLevel: warn
 features:
   analyticsDashboard: false
